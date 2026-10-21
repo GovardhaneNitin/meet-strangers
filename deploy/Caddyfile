@@ -1,0 +1,11 @@
+# HTTPS entry point. Caddy obtains and renews a Let's Encrypt certificate for
+# {$DOMAIN} automatically and forwards everything, including the WebSocket
+# upgrade on /ws, to the app.
+#
+# Caddy replaces any X-Forwarded-For header sent by the client with the real
+# client address, so the app is exactly one trusted proxy hop away
+# (TRUST_PROXY_HOPS=1, set in docker-compose.yml).
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:8080
+}

@@ -79,7 +79,7 @@ development.
 | `npm run build`    | Build the client and the server for production                  |
 | `npm start`        | Start the built server, which also serves the built client      |
 | `npm test`         | Run unit and integration tests in all packages                  |
-| `npm run test:e2e` | Run end-to-end tests with two Chromium browsers and fake media  |
+| `npm run test:e2e` | Run end-to-end tests in Chromium and Firefox with fake media    |
 | `npm run check`    | Formatting, lint, type checks and tests (the same checks as CI) |
 
 ## Project structure
@@ -106,26 +106,31 @@ option. The ones most deployments need:
 | `TURN_URLS`            | _(empty)_ | TURN server URLs. Needed for users behind strict NATs or firewalls       |
 | `TURN_SECRET`          | _(empty)_ | Shared secret for coturn's `static-auth-secret`                          |
 | `ICE_TRANSPORT_POLICY` | `all`     | Set to `relay` to send all media through TURN and hide users' IPs        |
-| `IP_HASH_SECRET`       | random    | Set a fixed value to keep bans across restarts                           |
 | `REPORT_BAN_THRESHOLD` | `3`       | Reports from distinct users within `REPORT_WINDOW_MS` that trigger a ban |
 
 ## Deployment
 
-```bash
-cp .env.example .env    # set ALLOWED_ORIGINS, TRUST_PROXY_HOPS and the TURN_* values
-docker compose up -d --build
-```
+The Compose stack is a complete single-server deployment: Caddy for HTTPS, the application, and
+a coturn TURN server.
 
-The Compose stack runs the application as a non-root user on a read-only filesystem, alongside a
-coturn TURN server. A production deployment also needs:
+1. Point your domain's DNS record at the server and open ports 80 and 443 (TCP), 443 (UDP),
+   3478 and 5349 (TCP and UDP), and the TURN relay port range from `deploy/turnserver.conf`.
+2. Configure and start the stack:
 
-- **HTTPS.** Browsers only grant camera and microphone access on secure origins. Terminate TLS at a
-  reverse proxy (Caddy, nginx or a cloud load balancer) that forwards WebSocket upgrades on `/ws`,
-  and set `TRUST_PROXY_HOPS` to the number of proxies in front of the app.
-- **A reachable TURN server.** Open UDP/TCP 3478, TLS 5349 and the relay port range from
-  `deploy/turnserver.conf`, and set `TURN_EXTERNAL_IP` to the server's public address.
-- **Health checks.** `GET /healthz` reports liveness. `GET /readyz` returns `503` while the server
-  is draining connections during shutdown.
+   ```bash
+   cp .env.example .env    # set DOMAIN, TURN_URLS, TURN_SECRET, TURN_REALM and TURN_EXTERNAL_IP
+   docker compose up -d --build
+   ```
+
+Caddy obtains and renews a Let's Encrypt certificate for `DOMAIN` automatically and proxies
+WebSocket traffic to the app. Compose derives `ALLOWED_ORIGINS` (`https://$DOMAIN`) and
+`TRUST_PROXY_HOPS` (`1`) from this setup. The app runs as a non-root user on a read-only
+filesystem.
+
+To use your own reverse proxy or load balancer instead, remove the `caddy` service, forward
+WebSocket upgrades on `/ws` to port 8080, and set `ALLOWED_ORIGINS` and `TRUST_PROXY_HOPS` to
+match your setup. `GET /healthz` reports liveness, and `GET /readyz` returns `503` while the server
+drains connections during shutdown.
 
 Matchmaking state is held in memory, so the server runs as a single instance. Running several
 instances would require moving the queue and active matches into shared storage such as Redis and
@@ -161,7 +166,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ```bash
 npm test                            # unit and integration tests
-npx playwright install chromium     # once, before the first end-to-end run
+npx playwright install chromium firefox   # once, before the first end-to-end run
 npm run test:e2e                    # end-to-end tests
 ```
 
@@ -169,7 +174,7 @@ npm run test:e2e                    # end-to-end tests
   configuration and the client's chat state machine.
 - **Integration tests** start a real server and connect WebSocket clients to check origin checks,
   call isolation, disconnects, malformed input, rate limits, reporting, bans and graceful shutdown.
-- **End-to-end tests** run two Chromium browsers with fake camera devices. They connect a real
+- **End-to-end tests** run in Chromium and Firefox with fake camera devices. They connect a real
   call, exchange video and chat messages, skip, report, and check the security headers.
 
 CI runs formatting, lint, type checks, tests, a dependency audit, the end-to-end suite and a
@@ -179,5 +184,8 @@ Docker build on every pull request.
 
 - Moderation relies on user reports and temporary IP-based bans. There is no automated content
   detection, users behind a shared IP share a ban, and a determined user can change IP.
+- Bans and rate-limit state are held in memory, so they are cleared when the server restarts.
+- Automated end-to-end tests cover Chromium and Firefox. Safari and mobile browsers are not
+  covered by automated tests.
 - The age requirement is self-declared.
 - Matchmaking runs on a single instance (see [Deployment](#deployment)).
