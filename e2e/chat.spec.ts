@@ -1,0 +1,103 @@
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+
+// Each stranger gets an isolated browser context; close them all between
+// tests so nobody from a previous test is still waiting in the queue.
+const contexts: BrowserContext[] = [];
+// Console errors (including CSP violations) fail the test.
+const consoleErrors: string[] = [];
+test.afterEach(async () => {
+  await Promise.all(contexts.splice(0).map((context) => context.close()));
+  expect(consoleErrors.splice(0)).toEqual([]);
+});
+
+async function openStranger(browser: Browser): Promise<Page> {
+  const context = await browser.newContext();
+  contexts.push(context);
+  const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => consoleErrors.push(error.message));
+  await page.goto('/');
+  await expect(page.getByRole('status').filter({ hasText: /online/i })).toBeVisible();
+  return page;
+}
+
+async function start(page: Page, mode: 'Video' | 'Voice only' = 'Video') {
+  await page.getByText(mode, { exact: true }).click();
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: 'Start chatting' }).click();
+}
+
+async function expectConnected(page: Page) {
+  await expect(page.getByPlaceholder('Type a message…')).toBeEnabled({ timeout: 30_000 });
+}
+
+test('two strangers connect by video, chat, and one skips', async ({ browser }) => {
+  const alice = await openStranger(browser);
+  const bob = await openStranger(browser);
+
+  await start(alice);
+  await expect(alice.getByText('Looking for someone to talk to…')).toBeVisible();
+  await start(bob);
+
+  await expectConnected(alice);
+  await expectConnected(bob);
+
+  // Real media is flowing: the remote <video> has decoded frames.
+  const remoteVideoWidth = (page: Page) =>
+    page.locator('.room__remote video').evaluate((v: HTMLVideoElement) => v.videoWidth);
+  await expect.poll(() => remoteVideoWidth(alice), { timeout: 15_000 }).toBeGreaterThan(0);
+  await expect.poll(() => remoteVideoWidth(bob), { timeout: 15_000 }).toBeGreaterThan(0);
+
+  // Peer-to-peer text chat; markup is rendered as text, never as HTML.
+  const message = '<img src=x onerror="window.pwned=1"> hello';
+  await alice.getByPlaceholder('Type a message…').fill(message);
+  await alice.getByRole('button', { name: 'Send message' }).click();
+  await expect(bob.locator('.chat-message--stranger')).toHaveText(`Stranger${message}`);
+  expect(await bob.evaluate(() => (window as unknown as { pwned?: number }).pwned)).toBeUndefined();
+
+  // Bob skips: Alice is told the stranger left.
+  await bob.getByRole('button', { name: /^Next/ }).click();
+  await expect(alice.getByText('Stranger has disconnected', { exact: true })).toBeVisible();
+  await expect(bob.getByText('Looking for someone to talk to…')).toBeVisible();
+
+  // Stop returns to the landing page and releases the camera.
+  await alice.getByRole('button', { name: 'Stop' }).click();
+  await expect(alice.getByRole('button', { name: 'Start chatting' })).toBeVisible();
+});
+
+test('voice-only users are matched with each other', async ({ browser }) => {
+  const a = await openStranger(browser);
+  const b = await openStranger(browser);
+  await start(a, 'Voice only');
+  await start(b, 'Voice only');
+  await expectConnected(a);
+  await expectConnected(b);
+  await expect(a.getByRole('button', { name: 'Turn camera off' })).toHaveCount(0);
+});
+
+test('reporting a stranger ends the chat and finds someone new', async ({ browser }) => {
+  const a = await openStranger(browser);
+  const b = await openStranger(browser);
+  await start(a);
+  await start(b);
+  await expectConnected(a);
+
+  await a.getByRole('button', { name: 'Report stranger' }).click();
+  await a.getByLabel('Harassment, hate or threats').check();
+  await a.getByRole('button', { name: 'Report and skip' }).click();
+
+  await expect(a.getByText('Your report was sent')).toBeVisible();
+  await expect(b.getByText('Stranger has disconnected', { exact: true })).toBeVisible();
+});
+
+test('sends strict security headers', async ({ request }) => {
+  const response = await request.get('/');
+  const headers = response.headers();
+  expect(headers['content-security-policy']).toContain("default-src 'self'");
+  expect(headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['referrer-policy']).toBe('no-referrer');
+  expect(headers['permissions-policy']).toContain('camera=(self)');
+});
