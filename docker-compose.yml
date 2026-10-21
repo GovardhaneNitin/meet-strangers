@@ -1,0 +1,40 @@
+# Production-like stack: the app plus a coturn TURN server.
+#
+#   cp .env.example .env   # set ALLOWED_ORIGINS, TURN_URLS, TURN_SECRET, TURN_REALM, TURN_EXTERNAL_IP
+#   docker compose up -d --build
+#
+# Put a TLS-terminating reverse proxy (Caddy, nginx, a cloud load balancer) in
+# front of the app: browsers only grant camera/microphone access on HTTPS.
+services:
+  app:
+    build: .
+    image: meet-strangers:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '127.0.0.1:8080:8080'
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 20s
+
+  turn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    # TURN allocates a wide UDP port range; host networking avoids publishing
+    # thousands of ports through Docker's proxy.
+    network_mode: host
+    volumes:
+      - ./deploy/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET:?TURN_SECRET must be set}
+      - --realm=${TURN_REALM:-meet.example.com}
+      - --external-ip=${TURN_EXTERNAL_IP:?TURN_EXTERNAL_IP must be set}
+    security_opt:
+      - no-new-privileges:true
