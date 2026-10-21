@@ -1,9 +1,10 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**'] },
+  { ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', '**/test-results/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -17,5 +18,12 @@ export default tseslint.config(
       eqeqeq: ['error', 'always'],
       'no-console': 'warn',
     },
+  },
+  {
+    files: ['packages/client/src/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+    ...reactHooks.configs.flat['recommended-latest'],
   },
 );

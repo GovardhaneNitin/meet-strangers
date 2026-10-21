@@ -1,0 +1,25 @@
+{
+  "name": "@meet-strangers/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web client for Meet Strangers.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "@meet-strangers/shared": "*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}
