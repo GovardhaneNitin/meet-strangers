@@ -298,6 +298,10 @@ input {
   font-size: 0.82rem;
 }
 
+.hint--error {
+  color: #ffc2c8;
+}
+
 .mode-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
