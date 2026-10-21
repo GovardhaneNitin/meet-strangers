@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage: install all deps, build client and server -----------------
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 
 # Copy manifests first so dependency installation is cached between builds.
@@ -16,7 +16,7 @@ COPY packages ./packages
 RUN npm run build
 
 # ---- Runtime stage: production deps + build output only ----------------------
-FROM node:22-alpine AS runtime
+FROM node:25-alpine AS runtime
 ENV NODE_ENV=production \
     PORT=8080
 WORKDIR /app
