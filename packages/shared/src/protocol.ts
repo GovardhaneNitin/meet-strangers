@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { LIMITS } from './limits.js';
 
+// Zod speeds up object parsing by compiling validators with `new Function`,
+// after probing whether eval is allowed. The web client's Content Security
+// Policy forbids eval ('unsafe-eval' is deliberately absent), so the probe
+// fails and browsers report it as a CSP violation. Use the interpreted path
+// everywhere; protocol messages are small, so the speed difference is
+// negligible.
+z.config({ jitless: true });
+
 /*
  * Wire protocol between browser and signaling server.
  *

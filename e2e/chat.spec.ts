@@ -6,10 +6,14 @@ type Frame = { type: string; matchId?: string };
 // Each stranger gets an isolated browser context; close them all between
 // tests so nobody from a previous test is still waiting in the queue.
 const contexts: BrowserContext[] = [];
-// Console errors (including CSP violations) fail the test.
+// Console errors fail the test. Content-Security-Policy violations are
+// collected separately because Chromium does not log every violation (e.g. a
+// blocked eval inside try/catch) to the console, while Firefox does.
 const consoleErrors: string[] = [];
+const cspViolations: string[] = [];
 test.afterEach(async () => {
   await Promise.all(contexts.splice(0).map((context) => context.close()));
+  expect(cspViolations.splice(0)).toEqual([]);
   expect(consoleErrors.splice(0)).toEqual([]);
 });
 
@@ -31,6 +35,16 @@ async function openStranger(browser: Browser): Promise<Page> {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
+  await page.exposeFunction('__reportCspViolation', (violation: string) => {
+    cspViolations.push(violation);
+  });
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      const report = (window as unknown as { __reportCspViolation: (v: string) => void })
+        .__reportCspViolation;
+      void report(`${event.violatedDirective} blocked ${event.blockedURI || 'inline'}`);
+    });
+  });
   await page.goto('/');
   await expect(page.getByRole('status').filter({ hasText: /online/i })).toBeVisible();
   return page;

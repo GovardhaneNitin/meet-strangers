@@ -1,6 +1,7 @@
 # Meet Strangers
 
 [![CI](https://github.com/GovardhaneNitin/meet-strangers/actions/workflows/ci.yml/badge.svg)](https://github.com/GovardhaneNitin/meet-strangers/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Meet Strangers is an anonymous, one-to-one video and voice chat that pairs you with a random
 person. There is no sign-up and nothing to configure: open the page, confirm you are 18 or older,
@@ -189,3 +190,27 @@ Docker build on every pull request.
   covered by automated tests.
 - The age requirement is self-declared.
 - Matchmaking runs on a single instance (see [Deployment](#deployment)).
+
+## Running a public instance
+
+This repository is a reference implementation, not a hosted service. Anyone who deploys it for
+the public is responsible for operating it lawfully where they run it, which for an anonymous
+video chat typically includes terms of service, a privacy policy, a way to handle abuse reports,
+child-safety reporting obligations and, in some countries, age verification stronger than the
+built-in self-declaration.
+
+## Contributing
+
+Contributions are welcome. Fork the repository, create a branch, and open a pull request.
+
+- Run `npm run check` before pushing; CI runs the same checks plus the end-to-end suite.
+- Add or update tests for behaviour you change.
+- Keep pull requests focused on one change and describe what changed and why.
+
+Ideas for where to take the project next: persistent bans and multi-instance matchmaking with
+Redis, a moderation dashboard, metrics and alerting, Safari and mobile testing, and bot
+protection. Please report security issues privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)

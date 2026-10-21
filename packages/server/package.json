@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Signaling and matchmaking server for Meet Strangers.",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
