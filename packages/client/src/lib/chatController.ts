@@ -81,7 +81,6 @@ export class ChatController {
   /** True between sending `join` and receiving `queued`, to retry rate-limited joins. */
   private joinPending = false;
   private joinRetryTimer: number | null = null;
-  private lastMatchId: string | null = null;
   private nextEntryId = 1;
 
   constructor(signalingUrl: string) {
@@ -157,17 +156,39 @@ export class ChatController {
   }
 
   /**
-   * Report the current (or just-ended) stranger and move on. Reporting the
-   * last chat is allowed because abusers often disconnect immediately.
+   * Report the stranger from chat `matchId`. Reporting a chat that already
+   * ended is allowed because abusers often disconnect immediately.
+   *
+   * Callers must capture `matchId` when the user *starts* reporting (opens
+   * the report dialog), not when they submit: by then the controller may
+   * have moved on to a different stranger, who must not be reported instead.
+   * The chat is only skipped if the reported stranger is still on screen.
+   *
+   * Returns false when the report could not be sent.
    */
-  report(reason: ReportReason): void {
-    const matchId = this.state.matchId ?? this.lastMatchId;
-    if (!matchId) return;
-    this.signaling.send({ type: 'report', matchId, reason });
-    this.next();
+  report(reason: ReportReason, matchId: string): boolean {
+    if (!this.signaling.send({ type: 'report', matchId, reason })) {
+      // The server forgets a connection's chats when it drops, so this
+      // report cannot be delivered later either; say so honestly.
+      this.update({
+        notice: {
+          kind: 'error',
+          text: "Your report couldn't be sent because the connection to the server was lost.",
+        },
+      });
+      return false;
+    }
+    const skipped = matchId === this.state.matchId;
+    if (skipped) this.next();
     this.update({
-      notice: { kind: 'info', text: 'Thanks. Your report was sent and you were moved on.' },
+      notice: {
+        kind: 'info',
+        text: skipped
+          ? 'Thanks. Your report was sent and you were moved on.'
+          : 'Thanks. Your report was sent.',
+      },
     });
+    return true;
   }
 
   dismissNotice(): void {
@@ -213,7 +234,10 @@ export class ChatController {
         return;
 
       case 'queued':
+        // The join succeeded. A retry scheduled for an unrelated rate-limit
+        // error (e.g. a report) must not re-join and lose our queue position.
         this.joinPending = false;
+        this.clearJoinRetry();
         return;
 
       case 'idle':
@@ -255,7 +279,6 @@ export class ChatController {
 
     this.closePeer();
     const matchId = message.matchId;
-    this.lastMatchId = matchId;
     this.nextEntryId = 1;
     this.update({
       phase: 'connecting',

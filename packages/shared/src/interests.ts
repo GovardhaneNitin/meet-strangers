@@ -1,7 +1,13 @@
 import { LIMITS } from './limits.js';
 
-/** Allowed characters after normalization: lowercase letters, digits, space, dash. */
-const INTEREST_PATTERN = /^[\p{Ll}\p{Lo}\p{N}][\p{Ll}\p{Lo}\p{N} -]*$/u;
+/**
+ * Allowed characters after normalization: lowercase, other and modifier
+ * letters, digits, space and dash, plus combining marks after the first
+ * character. Marks are required for many scripts: vowel signs in Devanagari
+ * ("संगीत"), Tamil or Thai are combining marks, and "ー" in Japanese
+ * ("ラーメン") is a modifier letter. The length limit bounds stacked marks.
+ */
+const INTEREST_PATTERN = /^[\p{Ll}\p{Lo}\p{Lm}\p{N}][\p{Ll}\p{Lo}\p{Lm}\p{M}\p{N} -]*$/u;
 
 /**
  * Canonicalise a single interest tag so that "  Music ", "music" and "MUSIC"

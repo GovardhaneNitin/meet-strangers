@@ -23,7 +23,7 @@ interface ChatRoomProps {
   onNext: () => void;
   onStop: () => void;
   onSend: (text: string) => boolean;
-  onReport: (reason: ReportReason) => void;
+  onReport: (reason: ReportReason, matchId: string) => void;
   onDismissNotice: () => void;
 }
 
@@ -49,13 +49,20 @@ export function ChatRoom({
   onReport,
   onDismissNotice,
 }: ChatRoomProps) {
-  const [reportOpen, setReportOpen] = useState(false);
+  /**
+   * The chat being reported, captured when the dialog opens. The current
+   * chat can change while the dialog is open (e.g. the connection fails and
+   * we move on automatically); the report must still target this one.
+   */
+  const [reportMatchId, setReportMatchId] = useState<string | null>(null);
+  const reportOpen = reportMatchId !== null;
   const [nextLocked, setNextLocked] = useState(false);
   const [escArmed, setEscArmed] = useState(false);
   const escTimer = useRef<number | null>(null);
 
   const canReport =
     state.matchId !== null &&
+    state.signaling === 'open' &&
     (state.phase === 'connecting' || state.phase === 'connected' || state.phase === 'ended');
 
   const next = useCallback(() => {
@@ -180,7 +187,7 @@ export function ChatRoom({
           <button
             type="button"
             className="button button--icon"
-            onClick={() => setReportOpen(true)}
+            onClick={() => setReportMatchId(state.matchId)}
             disabled={!canReport}
             aria-label="Report stranger"
             title="Report stranger"
@@ -213,10 +220,10 @@ export function ChatRoom({
 
       <ReportDialog
         open={reportOpen}
-        onClose={() => setReportOpen(false)}
+        onClose={() => setReportMatchId(null)}
         onSubmit={(reason) => {
-          setReportOpen(false);
-          onReport(reason);
+          if (reportMatchId) onReport(reason, reportMatchId);
+          setReportMatchId(null);
         }}
       />
     </main>

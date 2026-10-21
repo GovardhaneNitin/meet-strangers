@@ -31,12 +31,28 @@ export function resolveClientIp(req: IncomingMessage, trustedHops: number): stri
     // Fewer entries than proxies: the request did not traverse all of our
     // proxies (misconfiguration or direct access). Use the left-most entry
     // we have, which was added by our outermost proxy, or the socket.
-    const fallback = chain[0];
-    return fallback !== undefined && isIP(normalizeIp(fallback)) ? normalizeIp(fallback) : socketIp;
+    const fallback = parseForwardedEntry(chain[0] ?? '');
+    return isIP(fallback) ? fallback : socketIp;
   }
 
-  const candidate = normalizeIp(chain[index] ?? '');
+  const candidate = parseForwardedEntry(chain[index] ?? '');
   return isIP(candidate) ? candidate : socketIp;
+}
+
+/**
+ * Some proxies (e.g. Azure App Service) append the client's source port to
+ * X-Forwarded-For entries: "203.0.113.7:51234" or "[2001:db8::7]:51234".
+ * Strip it; otherwise the entry is not a valid IP and every client would
+ * fall back to the proxy's own address and share one rate-limit/ban bucket.
+ */
+export function parseForwardedEntry(entry: string): string {
+  const value = entry.trim();
+  const bracketed = /^\[([^\]]+)\](?::\d{1,5})?$/.exec(value);
+  if (bracketed?.[1]) return normalizeIp(bracketed[1]);
+  const ipv4WithPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/.exec(value);
+  if (ipv4WithPort?.[1]) return ipv4WithPort[1];
+  // Anything else, including bare IPv6 (whose colons are not a port).
+  return normalizeIp(value);
 }
 
 /** Collapse IPv4-mapped IPv6 addresses ("::ffff:1.2.3.4") to plain IPv4. */

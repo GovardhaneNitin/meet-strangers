@@ -34,6 +34,11 @@ const MAX_RATE_LIMIT_STRIKES = 50;
 /** A client that does not read its socket must not make us buffer unbounded data. */
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const RECENT_PARTNERS_TO_REMEMBER = 3;
+/**
+ * How long a client may take to acknowledge a server-initiated close before
+ * the socket is destroyed. `ws` would otherwise wait 30 s.
+ */
+const CLOSE_HANDSHAKE_TIMEOUT_MS = 2_000;
 const MATCH_TICK_MS = 1_000;
 const ONLINE_BROADCAST_MS = 5_000;
 const PRUNE_INTERVAL_MS = 60_000;
@@ -63,6 +68,8 @@ interface Session {
    * them after the chat ended.
    */
   recentPartners: RecentPartner[];
+  /** The server started closing this session; it must take no further part. */
+  closing: boolean;
 }
 
 export interface SignalingServerDeps {
@@ -196,6 +203,7 @@ export class SignalingServer {
       invalidMessages: 0,
       rateLimitStrikes: 0,
       recentPartners: [],
+      closing: false,
     };
     this.sessions.set(session.id, session);
     this.deps.logger.debug({ event: 'connected', session: session.id, client: clientKey });
@@ -230,7 +238,7 @@ export class SignalingServer {
   // -------------------------------------------------------------------------
 
   private onMessage(session: Session, data: RawData, isBinary: boolean): void {
-    if (!this.sessions.has(session.id)) return;
+    if (session.closing || !this.sessions.has(session.id)) return;
 
     if (!session.messageBucket.take()) {
       session.rateLimitStrikes += 1;
@@ -265,7 +273,7 @@ export class SignalingServer {
         { event: 'handler_error', session: session.id, err: error },
         'Message handler failed',
       );
-      session.ws.close(CloseCode.INTERNAL_ERROR, 'Internal error');
+      this.beginClose(session, CloseCode.INTERNAL_ERROR, 'Internal error');
     }
   }
 
@@ -440,7 +448,7 @@ export class SignalingServer {
       client: session.clientKey,
       reason,
     });
-    session.ws.close(CloseCode.POLICY_VIOLATION, reason);
+    this.beginClose(session, CloseCode.POLICY_VIOLATION, reason);
   }
 
   private closeBanned(session: Session): void {
@@ -449,7 +457,26 @@ export class SignalingServer {
       'banned',
       'You have been temporarily suspended after multiple reports.',
     );
-    session.ws.close(CloseCode.POLICY_VIOLATION, 'Banned');
+    this.beginClose(session, CloseCode.POLICY_VIOLATION, 'Banned');
+  }
+
+  /**
+   * Close a session from the server side.
+   *
+   * The WebSocket close handshake needs the client's cooperation, and 'close'
+   * only fires once it completes. A client that ignores the close frame
+   * would otherwise stay in the queue (and get matched with real users) or
+   * keep its current partner waiting. So leave matchmaking immediately,
+   * ignore further messages, and destroy the socket if the handshake does
+   * not finish quickly. The IP slot is still released in `onClose`, when the
+   * socket is really gone, so ignoring close frames cannot bypass limits.
+   */
+  private beginClose(session: Session, code: number, reason: string): void {
+    if (session.closing) return;
+    session.closing = true;
+    this.dispatch(this.deps.matchmaker.remove(session.id));
+    session.ws.close(code, reason);
+    setTimeout(() => session.ws.terminate(), CLOSE_HANDSHAKE_TIMEOUT_MS).unref();
   }
 
   // -------------------------------------------------------------------------

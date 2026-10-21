@@ -63,3 +63,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: docker build -t meet-strangers:ci .
+      - name: Container becomes healthy on a non-default PORT
+        run: |
+          docker run -d --name app -e PORT=9090 --health-interval=2s --health-start-period=2s meet-strangers:ci
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' app)
+            if [ "$status" = healthy ]; then exit 0; fi
+            if [ "$status" = unhealthy ]; then break; fi
+            sleep 1
+          done
+          docker logs app
+          docker inspect --format '{{json .State.Health}}' app
+          exit 1
