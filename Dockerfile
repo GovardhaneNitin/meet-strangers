@@ -36,8 +36,9 @@ ENV CLIENT_DIST_DIR=/app/packages/client/dist
 # Never run as root.
 USER node
 EXPOSE 8080
+# Shell form so ${PORT} is expanded at runtime: the port is configurable.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
-  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 
 # Run node directly (not via npm) so SIGTERM reaches the process for graceful shutdown.
 CMD ["node", "packages/server/dist/index.js"]
