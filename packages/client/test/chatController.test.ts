@@ -182,12 +182,71 @@ describe('ChatController', () => {
     controller.start(prefs, fakeStream);
     ws.receive(matched(MATCH_1));
     ws.receive({ type: 'partner_left', matchId: MATCH_1 });
-    controller.report('nudity');
+    expect(controller.report('nudity', MATCH_1)).toBe(true);
     expect(ws.sent.slice(-2)).toEqual([
       { type: 'report', matchId: MATCH_1, reason: 'nudity' },
       { type: 'join', mode: 'video', interests: [], acceptedTerms: true },
     ]);
     expect(controller.getSnapshot().notice?.kind).toBe('info');
+  });
+
+  it('reports the chat the user chose even after moving on, without skipping the new stranger', () => {
+    // Regression: the report used to target whoever was on screen at submit
+    // time. If the connection failed while the dialog was open, the app
+    // moved on and an innocent new stranger was reported and skipped.
+    const { controller, ws } = setup();
+    controller.start(prefs, fakeStream);
+    ws.receive(matched(MATCH_1)); // user opens the report dialog for MATCH_1
+    peers[0]!.options.onStateChange('failed'); // auto-next
+    ws.receive({ type: 'queued', mode: 'video' });
+    ws.receive(matched(MATCH_2));
+    const sentBefore = ws.sent.length;
+
+    expect(controller.report('harassment', MATCH_1)).toBe(true);
+
+    expect(ws.sent.slice(sentBefore)).toEqual([
+      { type: 'report', matchId: MATCH_1, reason: 'harassment' },
+    ]);
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'connecting', matchId: MATCH_2 });
+    expect(peers[1]!.closed).toBe(false);
+    expect(controller.getSnapshot().notice?.text).toBe('Thanks. Your report was sent.');
+  });
+
+  it('tells the user when a report cannot be sent because the server connection is down', () => {
+    // Regression: the report was silently dropped while the UI said "sent".
+    const { controller, ws } = setup();
+    controller.start(prefs, fakeStream);
+    ws.receive(matched(MATCH_1));
+    ws.drop();
+
+    expect(controller.report('nudity', MATCH_1)).toBe(false);
+
+    expect(ws.sent.filter((m) => m.type === 'report')).toHaveLength(0);
+    expect(controller.getSnapshot().notice).toMatchObject({ kind: 'error' });
+    expect(controller.getSnapshot().notice?.text).not.toMatch(/was sent/);
+  });
+
+  it('does not re-join after the join succeeded despite an unrelated rate-limit error', () => {
+    // Regression: a rate-limited *report* scheduled a join retry that was not
+    // cancelled by "queued", so the user re-joined later and lost their place.
+    const { controller, ws } = setup();
+    controller.start(prefs, fakeStream);
+    ws.receive({ type: 'queued', mode: 'video' });
+    ws.receive(matched(MATCH_1));
+    controller.report('spam', MATCH_1); // report + join
+    ws.receive({
+      type: 'error',
+      code: 'rate_limited',
+      message: 'Too many reports.',
+      retryAfterMs: 20_000,
+    });
+    ws.receive({ type: 'queued', mode: 'video' });
+    const joins = () => ws.sent.filter((m) => m.type === 'join').length;
+    const before = joins();
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(joins()).toBe(before);
   });
 
   it('automatically moves on when the WebRTC connection fails', () => {

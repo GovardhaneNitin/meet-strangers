@@ -82,7 +82,7 @@ export function App() {
       onNext={() => controller.next()}
       onStop={stop}
       onSend={(text) => controller.sendChat(text)}
-      onReport={(reason) => controller.report(reason)}
+      onReport={(reason, matchId) => controller.report(reason, matchId)}
       onDismissNotice={() => controller.dismissNotice()}
     />
   );
