@@ -88,6 +88,25 @@ describe('normalizeInterests', () => {
     ).toEqual(['music', 'video games']);
   });
 
+  it('accepts scripts that use combining marks and modifier letters', () => {
+    for (const word of [
+      'संगीत',
+      'क्रिकेट',
+      'யோகா',
+      'ดนตรี',
+      'ラーメン',
+      'موسيقى',
+      '音楽',
+      'футбол',
+    ]) {
+      expect(normalizeInterests([word])).toEqual([word]);
+    }
+  });
+
+  it('still rejects a leading combining mark and symbols', () => {
+    expect(normalizeInterests(['\u0301abc', 'a+b', 'a_b', '#tag'])).toEqual([]);
+  });
+
   it('caps the number of interests', () => {
     const many = Array.from({ length: 20 }, (_, i) => `tag${i}`);
     expect(normalizeInterests(many)).toHaveLength(LIMITS.MAX_INTERESTS);

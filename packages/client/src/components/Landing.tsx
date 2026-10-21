@@ -26,14 +26,23 @@ export function Landing({
   const [mode, setMode] = useState<ChatMode>('video');
   const [interests, setInterests] = useState<string[]>([]);
   const [draft, setDraft] = useState('');
+  const [interestError, setInterestError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState(false);
   const interestsId = useId();
+  const interestHintId = useId();
   const termsId = useId();
 
   const addInterest = (raw: string) => {
+    if (raw.trim() === '') return;
     const value = normalizeInterest(raw);
+    if (!value) {
+      // Keep the text so the user can correct it instead of losing it.
+      setInterestError('Interests can only contain letters, numbers, spaces and dashes.');
+      return;
+    }
     setDraft('');
-    if (!value || interests.includes(value) || interests.length >= LIMITS.MAX_INTERESTS) return;
+    setInterestError(null);
+    if (interests.includes(value) || interests.length >= LIMITS.MAX_INTERESTS) return;
     setInterests([...interests, value]);
   };
 
@@ -50,6 +59,11 @@ export function Landing({
     event.preventDefault();
     if (!accepted || busy || fatal) return;
     const pending = normalizeInterest(draft);
+    if (draft.trim() !== '' && !pending) {
+      // Don't start with the typed interest silently dropped.
+      setInterestError('Interests can only contain letters, numbers, spaces and dashes.');
+      return;
+    }
     const all = pending && !interests.includes(pending) ? [...interests, pending] : interests;
     onStart({ mode, interests: all.slice(0, LIMITS.MAX_INTERESTS) });
   };
@@ -141,7 +155,10 @@ export function Landing({
                 <input
                   id={interestsId}
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    setInterestError(null);
+                  }}
                   onKeyDown={onInterestKey}
                   onBlur={() => draft && addInterest(draft)}
                   maxLength={LIMITS.MAX_INTEREST_LENGTH}
@@ -151,11 +168,19 @@ export function Landing({
                   disabled={interests.length >= LIMITS.MAX_INTERESTS}
                   autoComplete="off"
                   enterKeyHint="done"
+                  aria-invalid={interestError !== null}
+                  aria-describedby={interestHintId}
                 />
               </div>
-              <p className="hint">
-                We'll try to pair you with someone who shares an interest, then with anyone.
-              </p>
+              {interestError ? (
+                <p className="hint hint--error" id={interestHintId} role="alert">
+                  {interestError}
+                </p>
+              ) : (
+                <p className="hint" id={interestHintId}>
+                  We'll try to pair you with someone who shares an interest, then with anyone.
+                </p>
+              )}
             </div>
 
             <label className="checkbox" htmlFor={termsId}>
