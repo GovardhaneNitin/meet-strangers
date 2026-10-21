@@ -1,16 +1,38 @@
-# Production-like stack: the app plus a coturn TURN server.
+# Production stack: Caddy (HTTPS), the app, and a coturn TURN server.
 #
-#   cp .env.example .env   # set ALLOWED_ORIGINS, TURN_URLS, TURN_SECRET, TURN_REALM, TURN_EXTERNAL_IP
+#   cp .env.example .env   # set DOMAIN, TURN_URLS, TURN_SECRET, TURN_REALM, TURN_EXTERNAL_IP
 #   docker compose up -d --build
 #
-# Put a TLS-terminating reverse proxy (Caddy, nginx, a cloud load balancer) in
-# front of the app: browsers only grant camera/microphone access on HTTPS.
+# Point DOMAIN's DNS record at this host and open ports 80 and 443 before
+# starting: Caddy needs them to obtain the certificate. Browsers only grant
+# camera and microphone access over HTTPS.
 services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN must be set}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
   app:
     build: .
     image: meet-strangers:latest
     restart: unless-stopped
     env_file: .env
+    # Derived from this topology so they cannot drift from it.
+    environment:
+      ALLOWED_ORIGINS: https://${DOMAIN:?DOMAIN must be set}
+      TRUST_PROXY_HOPS: '1'
+    # Only reachable through Caddy (and from the host for debugging).
     ports:
       - '127.0.0.1:8080:8080'
     read_only: true
@@ -38,3 +60,8 @@ services:
       - --external-ip=${TURN_EXTERNAL_IP:?TURN_EXTERNAL_IP must be set}
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  # Certificates and ACME account; keeping them avoids Let's Encrypt rate limits.
+  caddy_data:
+  caddy_config:

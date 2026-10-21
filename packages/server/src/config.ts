@@ -48,7 +48,11 @@ const envSchema = z.object({
    */
   ICE_TRANSPORT_POLICY: z.enum(['all', 'relay']).default('all'),
 
-  /** Secret for hashing IP addresses. Random per process when unset. */
+  /**
+   * Secret for hashing IP addresses. Random per process when unset. A fixed
+   * value only keeps hashed client keys stable across restarts (e.g. for log
+   * correlation); bans themselves live in memory and do not survive restarts.
+   */
   IP_HASH_SECRET: z.string().min(16).optional(),
   MAX_CONNECTIONS_PER_IP: positiveInt(4),
   MAX_CONNECTION_ATTEMPTS_PER_MINUTE: positiveInt(30),

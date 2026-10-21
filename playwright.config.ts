@@ -25,6 +25,21 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: 'firefox',
+      use: {
+        ...devices['Desktop Firefox'],
+        launchOptions: {
+          firefoxUserPrefs: {
+            // Synthetic camera/microphone, granted without a permission prompt.
+            'media.navigator.streams.fake': true,
+            'media.navigator.permission.disabled': true,
+            // Use real host addresses instead of mDNS names for local ICE.
+            'media.peerconnection.ice.obfuscate_host_addresses': false,
+          },
+        },
+      },
+    },
   ],
   webServer: {
     command: 'npm run build && node packages/server/dist/index.js',
