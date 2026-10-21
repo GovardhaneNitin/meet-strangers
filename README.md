@@ -1,154 +1,183 @@
 # Meet Strangers
 
-Anonymous, signup-free, one-to-one **video and voice chat with random strangers**, in the spirit of
-Omegle, built with a security-first and privacy-first design.
+[![CI](https://github.com/GovardhaneNitin/meet-strangers/actions/workflows/ci.yml/badge.svg)](https://github.com/GovardhaneNitin/meet-strangers/actions/workflows/ci.yml)
 
-- **No accounts.** Open the page, confirm you are 18+, and start talking. Each visit is a fresh,
-  anonymous session.
-- **Video or voice-only** modes, optional **interest matching**, peer-to-peer **text chat**.
-- **Next / Stop / Mute / Camera off / Report**, with the classic double-<kbd>Esc</kbd> shortcut to
-  skip.
-- **Media never touches the server.** Audio, video and chat flow directly between the two
-  browsers over encrypted WebRTC (DTLS-SRTP). The server only introduces peers to each other.
+Meet Strangers is an anonymous, one-to-one video and voice chat that pairs you with a random
+person. There is no sign-up and nothing to configure: open the page, confirm you are 18 or older,
+and you are connected to someone new.
 
-## Architecture
+Calls are peer-to-peer over WebRTC. The server matches users and relays the connection handshake,
+but audio, video and text chat travel directly between the two browsers, encrypted with
+DTLS-SRTP. Nothing is recorded or stored.
+
+## Features
+
+- Video or voice-only chat, matched with people using the same mode
+- Optional interests: users with a shared interest are paired first, then anyone after a short wait
+- Text chat alongside the call (sent peer-to-peer over a WebRTC data channel)
+- Next, stop, mute and camera controls, plus a double <kbd>Esc</kbd> shortcut to skip
+- Reporting, including the person who just left, with temporary bans after reports from multiple
+  users
+- Responsive layout for desktop and mobile
+
+## Tech stack
+
+| Area      | Technology                                         |
+| --------- | -------------------------------------------------- |
+| Client    | React 19, TypeScript, Vite                         |
+| Server    | Node.js, TypeScript, `ws`, Express 5, Helmet, Pino |
+| Protocol  | Shared TypeScript package with Zod validation      |
+| Media     | WebRTC, STUN, TURN (coturn)                        |
+| Testing   | Vitest, Playwright                                 |
+| Packaging | npm workspaces, Docker, Docker Compose             |
+
+## How it works
 
 ```mermaid
 flowchart LR
-  A[Browser A] -- "WebSocket /ws<br/>join · signal · report" --> S[Signaling server<br/>Node.js]
+  A[Browser A] -- "WebSocket /ws" --> S[Signaling server]
   B[Browser B] -- "WebSocket /ws" --> S
-  A <-. "WebRTC media + chat<br/>(peer-to-peer, encrypted)" .-> B
-  A -. "STUN / TURN" .- T[(TURN server<br/>coturn)]
+  A <-. "WebRTC: audio, video, chat" .-> B
+  A -. "STUN / TURN" .- T[(TURN server)]
   B -. "STUN / TURN" .- T
 ```
 
-| Package           | Stack                                  | Responsibility                                                      |
-| ----------------- | -------------------------------------- | ------------------------------------------------------------------- |
-| `packages/shared` | TypeScript, Zod                        | The wire protocol: message types, runtime validation, size limits   |
-| `packages/server` | Node 22, `ws`, Express 5, Helmet, Pino | Matchmaking, signaling relay, abuse protection, serving the web app |
-| `packages/client` | React 19, Vite                         | UI, camera/mic handling, WebRTC peer connection, text chat          |
-
-**Lifecycle of a chat**
-
-1. The browser opens a WebSocket to `/ws` and sends `join { mode, interests, acceptedTerms }`.
-2. The matchmaker pairs it with a waiting user of the same mode, preferring a shared interest and
-   falling back to anyone after `INTEREST_MATCH_TIMEOUT_MS`. Waiting is FIFO.
-3. Both users receive `matched` with a server-generated `matchId`, a fixed role (`offerer` or
-   `answerer`, which rules out offer "glare"), and short-lived ICE/TURN credentials.
-4. SDP offers, answers and ICE candidates are relayed as `signal { matchId, payload }`. The server
-   forwards a signal **only** to the sender's current partner in that exact match.
-5. Pressing **Next** sends `join` again. The server ends the chat atomically, notifies the partner
-   (`partner_left`) and re-queues the user. The same pair is not re-matched during a cooldown.
-
-## Security & privacy model
-
-Every input from a browser is treated as hostile: the other stranger, a modified client, or a
-script.
-
-| Threat                                     | Mitigation                                                                                                                                                          |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cross-site WebSocket hijacking             | `Origin` must match `ALLOWED_ORIGINS` (or same-origin) before the handshake completes, else `403`                                                                   |
-| Injecting signals into someone else's call | Clients can't address users. Signals go only to the current partner of the referenced `matchId`; stale or forged IDs are dropped                                    |
-| Late signals leaking into the next chat    | Every match-scoped message carries `matchId`, checked on the server **and** the client                                                                              |
-| Malformed / oversized messages             | Strict Zod schemas (unknown keys rejected), 64 KB frame limit, SDP/candidate/chat length limits, binary frames rejected; repeat offenders disconnected (`1008`)     |
-| Flooding / "next" spam                     | Per-connection token buckets (messages, joins, reports), per-IP concurrent connection and connection-rate limits, global connection cap, slow-consumer cut-off      |
-| IP spoofing to evade limits                | `X-Forwarded-For` is ignored unless `TRUST_PROXY_HOPS` is set, and then only the entry written by your own proxy is used. IPv6 is limited per /64                   |
-| Abusive users                              | Report button (also for the stranger who just left). Reports from **distinct** reporters within a window trigger a temporary ban, and active sessions are closed    |
-| Personal data                              | No accounts, cookies, chat logs or recordings. IPs are only kept in memory as an HMAC; logs never contain raw IPs, SDP, ICE candidates or chat text                 |
-| TURN credential theft / TURN as open relay | Time-limited HMAC credentials (TURN REST API) per chat. The coturn config denies private/loopback peers (SSRF) and sets quotas                                      |
-| XSS / clickjacking / data exfiltration     | Strict CSP (`script-src 'self'`, `frame-ancestors 'none'`, no inline scripts), chat rendered as text and never linkified, `Permissions-Policy`, `no-referrer`, HSTS |
-| Dead connections                           | WebSocket heartbeats every 15 s; ICE connection timeouts and automatic move-on on the client                                                                        |
-| Operational                                | Fail-fast config validation, graceful shutdown (clients are told and reconnect with jittered backoff), health/readiness probes, non-root read-only container        |
-
-> **IP address visibility.** As with any peer-to-peer call, a stranger's browser can learn your IP
-> address from ICE candidates. Set `ICE_TRANSPORT_POLICY=relay` (requires TURN) to route all media
-> through your TURN server so peers only ever see the relay's address.
-
-See [SECURITY.md](SECURITY.md) for how to report vulnerabilities and for known limitations.
+1. The client opens a WebSocket to `/ws` and sends a `join` message with its mode and interests.
+2. The matchmaker pairs it with the longest-waiting compatible user. Users with interests are held
+   for a shared-interest match for up to `INTEREST_MATCH_TIMEOUT_MS` before anyone is accepted.
+3. Both clients receive a `matched` message with a server-generated `matchId`, a fixed role
+   (offerer or answerer), and short-lived TURN credentials. Fixed roles avoid both sides sending
+   an offer at the same time.
+4. SDP offers, answers and ICE candidates are relayed as `signal` messages. The server only
+   forwards a signal to the sender's partner in that exact match, so a client can never reach
+   anyone else's call, and late messages from a previous chat are dropped.
+5. Skipping sends `join` again. The server ends the chat, notifies the other person and re-queues
+   the user. The same two people are not re-matched for `REMATCH_COOLDOWN_MS`.
 
 ## Getting started
 
-Requirements: **Node.js ≥ 22.12** (see `.nvmrc`) and npm ≥ 10.
+Prerequisites: Node.js 22.12 or newer (see `.nvmrc`) and npm 10 or newer.
 
 ```bash
+git clone https://github.com/GovardhaneNitin/meet-strangers.git
+cd meet-strangers
 npm install
 npm run dev
 ```
 
-This starts the signaling server on `:8080` and the Vite dev server on
-[http://localhost:5173](http://localhost:5173), which proxies `/ws` to the server. Open two browser
-windows (or a normal and a private window) to talk to yourself. `localhost` counts as a secure
-context, so camera access works without HTTPS during development.
+This starts the signaling server on port 8080 and the client on
+[http://localhost:5173](http://localhost:5173). The Vite dev server proxies `/ws` to the backend.
+To try a call locally, open the app in two separate windows (for example a normal and a private
+window). Browsers treat `localhost` as a secure context, so camera access works without HTTPS in
+development.
 
 ### Scripts
 
-| Command            | What it does                                                     |
-| ------------------ | ---------------------------------------------------------------- |
-| `npm run dev`      | Server (watch mode) + client dev server                          |
-| `npm run build`    | Production build of client and server                            |
-| `npm start`        | Run the built server (also serves the built client)              |
-| `npm test`         | Unit and integration tests for all packages (Vitest)             |
-| `npm run test:e2e` | End-to-end: two real Chromium browsers with fake cameras connect |
-| `npm run check`    | Format check, lint, typecheck, and tests, as run in CI           |
+| Command            | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| `npm run dev`      | Run the server in watch mode and the client dev server          |
+| `npm run build`    | Build the client and the server for production                  |
+| `npm start`        | Start the built server, which also serves the built client      |
+| `npm test`         | Run unit and integration tests in all packages                  |
+| `npm run test:e2e` | Run end-to-end tests with two Chromium browsers and fake media  |
+| `npm run check`    | Formatting, lint, type checks and tests (the same checks as CI) |
+
+## Project structure
+
+```
+packages/
+  shared/   Wire protocol: message schemas, size limits, interest normalization
+  server/   Signaling server: matchmaking, message relay, rate limiting, static hosting
+  client/   React application: UI, media devices, WebRTC connection, text chat
+e2e/        Playwright end-to-end tests
+deploy/     coturn configuration
+```
 
 ## Configuration
 
-All configuration comes from environment variables, validated at startup. See
-[`.env.example`](.env.example) for the full annotated list. The most important ones:
+The server reads its configuration from environment variables and validates them at startup; an
+invalid value stops the process with a clear error. [`.env.example`](.env.example) documents every
+option. The ones most deployments need:
 
-| Variable               | Default   | Notes                                                                       |
-| ---------------------- | --------- | --------------------------------------------------------------------------- |
-| `ALLOWED_ORIGINS`      | _(empty)_ | e.g. `https://meet.example.com`. Empty = same-origin only                   |
-| `TRUST_PROXY_HOPS`     | `0`       | Number of reverse proxies in front of the app. **Must match reality**       |
-| `TURN_URLS`            | _(empty)_ | coturn URLs. Without TURN, users behind strict NATs/firewalls can't connect |
-| `TURN_SECRET`          | _(empty)_ | coturn `static-auth-secret` (`openssl rand -hex 32`)                        |
-| `ICE_TRANSPORT_POLICY` | `all`     | `relay` hides users' IPs from each other (requires TURN)                    |
-| `IP_HASH_SECRET`       | random    | Set it to keep bans across restarts                                         |
-| `REPORT_BAN_THRESHOLD` | `3`       | Distinct reporters within `REPORT_WINDOW_MS` before a `BAN_DURATION_MS` ban |
+| Variable               | Default   | Description                                                              |
+| ---------------------- | --------- | ------------------------------------------------------------------------ |
+| `ALLOWED_ORIGINS`      | _(empty)_ | Origins allowed to open the WebSocket. Empty means same-origin only      |
+| `TRUST_PROXY_HOPS`     | `0`       | Number of reverse proxies in front of the server                         |
+| `TURN_URLS`            | _(empty)_ | TURN server URLs. Needed for users behind strict NATs or firewalls       |
+| `TURN_SECRET`          | _(empty)_ | Shared secret for coturn's `static-auth-secret`                          |
+| `ICE_TRANSPORT_POLICY` | `all`     | Set to `relay` to send all media through TURN and hide users' IPs        |
+| `IP_HASH_SECRET`       | random    | Set a fixed value to keep bans across restarts                           |
+| `REPORT_BAN_THRESHOLD` | `3`       | Reports from distinct users within `REPORT_WINDOW_MS` that trigger a ban |
 
 ## Deployment
 
 ```bash
-cp .env.example .env    # fill in ALLOWED_ORIGINS, TURN_*, TRUST_PROXY_HOPS
+cp .env.example .env    # set ALLOWED_ORIGINS, TRUST_PROXY_HOPS and the TURN_* values
 docker compose up -d --build
 ```
 
-The compose file runs the app (non-root, read-only filesystem, all capabilities dropped) and a
-hardened coturn server. You also need:
+The Compose stack runs the application as a non-root user on a read-only filesystem, alongside a
+coturn TURN server. A production deployment also needs:
 
-1. **HTTPS.** Browsers only allow camera and microphone access in a secure context. Terminate TLS
-   in a reverse proxy (Caddy, nginx, or a cloud load balancer) that forwards WebSocket upgrades for
-   `/ws`, and set `TRUST_PROXY_HOPS` to the number of proxies.
-2. **A TURN server** reachable on UDP/TCP 3478, TLS 5349 and the relay port range in
-   `deploy/turnserver.conf`, with `TURN_EXTERNAL_IP` set to its public IP.
-3. **Probes:** `GET /healthz` (liveness) and `GET /readyz` (returns `503` while draining).
+- **HTTPS.** Browsers only grant camera and microphone access on secure origins. Terminate TLS at a
+  reverse proxy (Caddy, nginx or a cloud load balancer) that forwards WebSocket upgrades on `/ws`,
+  and set `TRUST_PROXY_HOPS` to the number of proxies in front of the app.
+- **A reachable TURN server.** Open UDP/TCP 3478, TLS 5349 and the relay port range from
+  `deploy/turnserver.conf`, and set `TURN_EXTERNAL_IP` to the server's public address.
+- **Health checks.** `GET /healthz` reports liveness. `GET /readyz` returns `503` while the server
+  is draining connections during shutdown.
 
-### Scaling
+Matchmaking state is held in memory, so the server runs as a single instance. Running several
+instances would require moving the queue and active matches into shared storage such as Redis and
+routing signaling messages between instances.
 
-Matchmaking state lives in process memory, so a single instance is the unit of deployment. Each
-instance is lightweight because it only relays small signaling messages, never media. Load-test
-with your own traffic profile before relying on a specific capacity. To run several instances, move the queue and match table to shared storage
-(e.g. Redis) and route signals between instances. The matchmaker's event-based interface was
-designed so the transport layer would not need to change.
+## Security
+
+Every message from a client is treated as untrusted. The main protections are:
+
+- **Message validation:** strict schemas that reject unknown fields, size limits on every field,
+  and a 64 KB frame limit. Clients that keep sending invalid data are disconnected.
+- **Cross-site protection:** WebSocket connections are only accepted from allowed origins.
+- **Call isolation:** a client can only send signals to its current partner, identified by a
+  server-issued `matchId`.
+- **Rate limiting:** limits per connection (messages, skips, reports) and per IP address
+  (concurrent connections and connection rate). IPv6 addresses are grouped by /64.
+- **Proxy handling:** `X-Forwarded-For` is only trusted for the configured number of proxies, so
+  clients cannot spoof their address to evade limits or bans.
+- **Privacy:** no accounts, cookies, logs of chat content or recordings. IP addresses are only
+  kept in memory as keyed hashes and never written to logs.
+- **TURN:** credentials expire and are issued per chat. The coturn configuration blocks relaying
+  to private and loopback networks.
+- **Browser hardening:** a strict Content Security Policy, a `Permissions-Policy` limited to camera
+  and microphone, and chat messages rendered as plain text.
+
+With the default `ICE_TRANSPORT_POLICY=all`, a peer can learn the other user's IP address from ICE
+candidates, as with any peer-to-peer call. Set `ICE_TRANSPORT_POLICY=relay` to route media
+through TURN instead.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Testing
 
-- **Shared**: protocol validation, size limits, interest normalization.
-- **Server**: matchmaker state machine, token buckets, IP guard (limits, distinct-reporter bans,
-  pruning), `X-Forwarded-For` parsing, origin checks, TURN credentials, configuration. Integration
-  tests start a real server and drive it with WebSocket clients: cross-site handshakes, signal
-  isolation between matches, disconnect handling, oversized/binary/garbage frames, rate limiting,
-  reporting after the partner left, bans, and graceful shutdown.
-- **Client**: the chat state machine (stale `matchId` events, rate-limited join retry, reconnects,
-  bans, late matches after stop) and media error handling.
-- **End-to-end**: two isolated Chromium browsers with fake camera devices are matched, exchange
-  real video frames and chat messages (including an HTML-injection attempt), skip, report, and
-  verify security headers.
+```bash
+npm test                            # unit and integration tests
+npx playwright install chromium     # once, before the first end-to-end run
+npm run test:e2e                    # end-to-end tests
+```
 
-## Known limitations
+- **Unit tests** cover the protocol schemas, the matchmaker, rate limiting, IP handling,
+  configuration and the client's chat state machine.
+- **Integration tests** start a real server and connect WebSocket clients to check origin checks,
+  call isolation, disconnects, malformed input, rate limits, reporting, bans and graceful shutdown.
+- **End-to-end tests** run two Chromium browsers with fake camera devices. They connect a real
+  call, exchange video and chat messages, skip, report, and check the security headers.
 
-- There is **no automated content moderation** (e.g. nudity detection). Moderation relies on user
-  reports and temporary bans. Bans are per IP, so users behind a shared NAT share a ban, and a
-  determined abuser can change IP.
-- The 18+ confirmation is self-declared, as on comparable services.
-- Single-instance matchmaking (see [Scaling](#scaling)).
+CI runs formatting, lint, type checks, tests, a dependency audit, the end-to-end suite and a
+Docker build on every pull request.
+
+## Limitations
+
+- Moderation relies on user reports and temporary IP-based bans. There is no automated content
+  detection, users behind a shared IP share a ban, and a determined user can change IP.
+- The age requirement is self-declared.
+- Matchmaking runs on a single instance (see [Deployment](#deployment)).
