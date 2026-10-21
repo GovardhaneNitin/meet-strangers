@@ -25,6 +25,33 @@ describe('resolveClientIp', () => {
     );
   });
 
+  it('strips source ports that some proxies append to forwarded entries', () => {
+    // Regression: "ip:port" failed validation, so every client fell back to
+    // the proxy's address and shared one connection limit and ban bucket.
+    expect(resolveClientIp(fakeReq('10.0.0.1', '203.0.113.7:51234'), 1)).toBe('203.0.113.7');
+    expect(resolveClientIp(fakeReq('10.0.0.1', '[2001:db8::7]:51234'), 1)).toBe('2001:db8::7');
+    expect(resolveClientIp(fakeReq('10.0.0.1', '[2001:db8::7]'), 1)).toBe('2001:db8::7');
+    expect(resolveClientIp(fakeReq('10.0.0.1', '2001:db8::7'), 1)).toBe('2001:db8::7');
+    expect(resolveClientIp(fakeReq('10.0.0.1', '6.6.6.6, 198.51.100.7:443'), 1)).toBe(
+      '198.51.100.7',
+    );
+    expect(resolveClientIp(fakeReq('10.0.0.1', '[::ffff:192.0.2.1]:80'), 1)).toBe('192.0.2.1');
+  });
+
+  it('keeps distinct clients behind a port-appending proxy in separate buckets', () => {
+    const guard = new IpGuard({
+      maxConnectionsPerIp: 1,
+      maxConnectionAttemptsPerMinute: 30,
+      reportBanThreshold: 3,
+      reportWindowMs: 60_000,
+      banDurationMs: 60_000,
+    });
+    const admitted = ['198.51.100.10:40000', '198.51.100.11:41000', '198.51.100.12:42000'].map(
+      (xff) => guard.admit(resolveClientIp(fakeReq('10.0.0.1', xff), 1)).ok,
+    );
+    expect(admitted).toEqual([true, true, true]);
+  });
+
   it('falls back to the socket address for garbage headers', () => {
     expect(resolveClientIp(fakeReq('203.0.113.9', 'not-an-ip'), 1)).toBe('203.0.113.9');
   });

@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+import net from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { pino } from 'pino';
@@ -125,6 +127,44 @@ function rawUpgradeStatus(headers: Record<string, string>, path = '/ws'): Promis
   });
 }
 
+/**
+ * Minimal hand-rolled WebSocket client that never answers the server's close
+ * frame, like a modified client or a peer whose network just died.
+ */
+async function connectUnresponsiveClient(): Promise<{
+  send: (text: string) => void;
+  destroyed: Promise<number>;
+  socket: net.Socket;
+}> {
+  const { port, hostname } = new URL(url);
+  const socket = net.connect(Number(port), hostname);
+  await new Promise<void>((resolve) => socket.once('connect', () => resolve()));
+  const startedAt = Date.now();
+  const destroyed = new Promise<number>((resolve) =>
+    socket.once('close', () => resolve(Date.now() - startedAt)),
+  );
+  socket.on('error', () => undefined);
+  socket.write(
+    `GET /ws HTTP/1.1\r\nHost: ${hostname}:${port}\r\nOrigin: ${ORIGIN}\r\n` +
+      'Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n' +
+      `Sec-WebSocket-Key: ${randomBytes(16).toString('base64')}\r\n\r\n`,
+  );
+  await new Promise<void>((resolve) => socket.once('data', () => resolve()));
+
+  const send = (text: string) => {
+    const payload = Buffer.from(text);
+    if (payload.length > 125) throw new Error('test frames must be short');
+    const mask = randomBytes(4);
+    const frame = Buffer.alloc(6 + payload.length);
+    frame[0] = 0x81; // FIN + text
+    frame[1] = 0x80 | payload.length; // masked
+    mask.copy(frame, 2);
+    for (let i = 0; i < payload.length; i++) frame[6 + i] = payload[i]! ^ mask[i % 4]!;
+    socket.write(frame);
+  };
+  return { send, destroyed, socket };
+}
+
 beforeEach(async () => {
   await start();
 });
@@ -195,6 +235,38 @@ describe('signaling server', () => {
     expect(await a.next('error')).toMatchObject({ code: 'invalid_message' });
     for (let i = 0; i < 5; i++) a.send('{not json');
     expect(await a.closed()).toBe(1008);
+  });
+
+  it('removes a kicked client from matchmaking at once, even if it ignores the close frame', async () => {
+    // Regression: sessions stayed queued/matched until the close handshake
+    // finished (up to 30 s), so honest users were matched with kicked or
+    // banned clients and left waiting on a call that could never connect.
+    const honest = await Client.connect();
+    honest.join();
+    await honest.next('queued');
+
+    const rogue = await connectUnresponsiveClient();
+    rogue.send(JSON.stringify({ type: 'join', mode: 'video', interests: [], acceptedTerms: true }));
+    const match = await honest.next('matched');
+
+    for (let i = 0; i < 5; i++) rogue.send('garbage');
+    // The partner is released immediately, not when the socket finally closes.
+    expect(await honest.next('partner_left', 1000)).toEqual({
+      type: 'partner_left',
+      matchId: match.matchId,
+    });
+
+    // A new honest user must not be matched with the kicked client.
+    const other = await Client.connect();
+    other.join();
+    await other.next('queued');
+    honest.join();
+    const rematch = await honest.next('matched');
+    expect(rematch.matchId).not.toBe(match.matchId);
+    expect((await other.next('matched')).matchId).toBe(rematch.matchId);
+
+    // The socket is destroyed shortly after, well before ws's 30 s default.
+    expect(await rogue.destroyed).toBeLessThan(5_000);
   });
 
   it('rejects binary frames and oversized messages', async () => {
