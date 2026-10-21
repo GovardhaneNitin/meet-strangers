@@ -15,3 +15,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Stay on the Node.js LTS line used in CI (.nvmrc); upgrade majors deliberately.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
